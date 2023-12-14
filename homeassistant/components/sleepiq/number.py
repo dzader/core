@@ -5,14 +5,14 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, cast
 
-from asyncsleepiq import SleepIQActuator, SleepIQBed, SleepIQSleeper
+from asyncsleepiq import SleepIQActuator, SleepIQBed, SleepIQSleeper, SleepIQFootWarmer, FootWarmingTemps
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import ACTUATOR, DOMAIN, ENTITY_TYPES, FIRMNESS, ICON_OCCUPIED
+from .const import ACTUATOR, DOMAIN, ENTITY_TYPES, FIRMNESS, ICON_OCCUPIED, FOOT_WARMING_TIMER
 from .coordinator import SleepIQData, SleepIQDataUpdateCoordinator
 from .entity import SleepIQBedEntity
 
@@ -25,6 +25,7 @@ class SleepIQNumberEntityDescriptionMixin:
     set_value_fn: Callable[[Any, int], Coroutine[None, None, None]]
     get_name_fn: Callable[[SleepIQBed, Any], str]
     get_unique_id_fn: Callable[[SleepIQBed, Any], str]
+    available_fn: Callable[[Any], bool]
 
 
 @dataclass
@@ -68,6 +69,19 @@ def _get_sleeper_name(bed: SleepIQBed, sleeper: SleepIQSleeper) -> str:
 def _get_sleeper_unique_id(bed: SleepIQBed, sleeper: SleepIQSleeper) -> str:
     return f"{sleeper.sleeper_id}_{FIRMNESS}"
 
+async def _async_set_foot_warming_time(foot_warmer: SleepIQFootWarmer, time: int) -> None:
+    # use the foot warmer's current temperature
+    await foot_warmer.turn_on(FootWarmingTemps(foot_warmer.temperature), time)
+
+def _get_foot_warming_name(bed: SleepIQBed, foot_warmer: SleepIQFootWarmer) -> str:
+    sleeper_name = next((sleeper.name for sleeper in bed.sleepers if sleeper.side == foot_warmer.side), foot_warmer.side.value)
+    return f"SleepNumber {bed.name} {sleeper_name} {ENTITY_TYPES[FOOT_WARMING_TIMER]}"
+
+def _get_foot_warming_unique_id(bed: SleepIQBed, foot_warmer: SleepIQFootWarmer) -> str:
+    return f"{bed.id}_{foot_warmer.side}_{FOOT_WARMING_TIMER}"
+
+def _get_foot_warmer_available(foot_warmer: SleepIQFootWarmer) ->  bool:
+    return foot_warmer.temperature > 0
 
 NUMBER_DESCRIPTIONS: dict[str, SleepIQNumberEntityDescription] = {
     FIRMNESS: SleepIQNumberEntityDescription(
@@ -81,6 +95,7 @@ NUMBER_DESCRIPTIONS: dict[str, SleepIQNumberEntityDescription] = {
         set_value_fn=_async_set_firmness,
         get_name_fn=_get_sleeper_name,
         get_unique_id_fn=_get_sleeper_unique_id,
+        available_fn= lambda firmness: True,
     ),
     ACTUATOR: SleepIQNumberEntityDescription(
         key=ACTUATOR,
@@ -93,6 +108,20 @@ NUMBER_DESCRIPTIONS: dict[str, SleepIQNumberEntityDescription] = {
         set_value_fn=_async_set_actuator_position,
         get_name_fn=_get_actuator_name,
         get_unique_id_fn=_get_actuator_unique_id,
+        available_fn= lambda actuator: True,
+    ),
+    FOOT_WARMING_TIMER: SleepIQNumberEntityDescription(
+        key=FOOT_WARMING_TIMER,
+        native_min_value=30,
+        native_max_value=360,
+        native_step=30,
+        name=ENTITY_TYPES[FOOT_WARMING_TIMER],
+        icon=ICON_OCCUPIED,
+        value_fn=lambda foot_warmer: foot_warmer.timer,
+        set_value_fn=_async_set_foot_warming_time,
+        get_name_fn=_get_foot_warming_name,
+        get_unique_id_fn=_get_foot_warming_unique_id,
+        available_fn= _get_foot_warmer_available,
     ),
 }
 
@@ -123,6 +152,15 @@ async def async_setup_entry(
                     bed,
                     actuator,
                     NUMBER_DESCRIPTIONS[ACTUATOR],
+                )
+            )
+        for foot_warmer in bed.foundation.foot_warmers:
+            entities.append(
+                SleepIQNumberEntity(
+                    data.data_coordinator,
+                    bed,
+                    foot_warmer,
+                    NUMBER_DESCRIPTIONS[FOOT_WARMING_TIMER],
                 )
             )
 
@@ -161,3 +199,8 @@ class SleepIQNumberEntity(SleepIQBedEntity[SleepIQDataUpdateCoordinator], Number
         await self.entity_description.set_value_fn(self.device, int(value))
         self._attr_native_value = value
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.entity_description.available_fn(self.device)

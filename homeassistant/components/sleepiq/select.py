@@ -86,7 +86,8 @@ class SleepIQFootWarmingTempSelectEntity(SleepIQBedEntity[SleepIQDataUpdateCoord
     ) -> None:
         """Initialize the select entity."""
         self.foot_warmer = foot_warmer
-        self._attr_name = f"SleepNumber {bed.name} {foot_warmer.side} Foot Warmer"
+        sleeper_name = next((sleeper.name for sleeper in bed.sleepers if sleeper.side == foot_warmer.side), foot_warmer.side.value)
+        self._attr_name = f"SleepNumber {bed.name} {sleeper_name} Foot Warmer"
         self._attr_unique_id = f"{bed.id}-foot-warmer-{foot_warmer.side}"
         self._attr_options = [e.name.title() for e in FootWarmingTemps]
         super().__init__(coordinator, bed)
@@ -108,4 +109,5 @@ class SleepIQFootWarmingTempSelectEntity(SleepIQBedEntity[SleepIQDataUpdateCoord
             await self.foot_warmer.turn_on(temperature, timer)
 
         self._attr_current_option = option
+        await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
